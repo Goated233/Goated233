@@ -12,6 +12,8 @@ from ui.embeds.health import HealthEmbedFactory
 from ui.embeds.premium import PlayerSnapshot, PremiumEmbedFactory, PremiumPalette
 from ui.views.codex import HelpCodexView, OnboardingView
 from ui.views.game_launcher import GameBrowserView
+from app.startup import StartupValidator
+from ui.embeds.health import HealthEmbedFactory
 from ui.views.home import ArcadeHomeView, build_home_embed
 
 
@@ -32,6 +34,10 @@ class OwnerSetupCog(app_commands.Group):
         if interaction.channel is None:
             return
         await interaction.channel.send(embed=build_home_embed(self.bot.settings.owner_display), view=ArcadeHomeView(self.bot.admin_service, self.bot.session_manager))
+        await interaction.channel.send(
+            embed=build_home_embed(self.bot.settings.owner_display),
+            view=ArcadeHomeView(self.bot.admin_service, self.bot.session_manager),
+        )
 
     @app_commands.command(name="health", description="Run startup health checks for the arcade platform.")
     async def health(self, interaction: discord.Interaction) -> None:

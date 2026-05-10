@@ -75,6 +75,9 @@ class DistributedSessionManager:
         self.store = store
         self.timeout_seconds = timeout_seconds
         self.max_concurrent_sessions = max_concurrent_sessions
+    def __init__(self, store: SessionStore, timeout_seconds: int = 1800):
+        self.store = store
+        self.timeout_seconds = timeout_seconds
 
     async def start_session(
         self,
@@ -98,6 +101,9 @@ class DistributedSessionManager:
                 existing_session = await self.load_session(existing)
                 if existing_session and existing_session.game_id == game_id and existing_session.status in {SessionStatus.LOBBY, SessionStatus.ACTIVE, SessionStatus.RECOVERING}:
                     return SessionStartResult(False, None, existing, f"player_already_in_{game_id}")
+        for player_id in player_discord_ids:
+            existing = await self.store.active_for_user(player_id)
+            if existing and not force_recovery:
                 return SessionStartResult(False, None, existing, "player_already_in_session")
         session = ActiveSession(
             session_id=str(uuid4()),
@@ -155,6 +161,12 @@ class DistributedSessionManager:
             await self.touch(session)
             return session
         return None
+    async def with_interaction_lock(self, session_id: str, actor_discord_id: int) -> bool:
+        lock = await self.store.acquire_lock(session_id, actor_discord_id)
+        if not lock.acquired:
+            return False
+        await self.store.release_lock(lock)
+        return True
 
     async def touch(self, session: ActiveSession) -> None:
         await self.store.save(session.session_id, session.to_redis())

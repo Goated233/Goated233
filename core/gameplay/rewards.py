@@ -45,6 +45,7 @@ class RewardPersistenceService:
         await self._assert_unique_transaction(coin_key)
         self.guard.validate_transaction(user.id, "xp", xp, profile.xp, xp_key)
         self.guard.validate_transaction(user.id, "coins", capped_coins, profile.coins, coin_key)
+        capped_coins = self.economy.reward_cap(profile.level, "dungeon_raid", coins)
         progress = self.progression.apply_xp(profile.xp, xp, profile.level)
         profile.xp = progress.total_xp
         profile.level = progress.level
@@ -100,3 +101,6 @@ class RewardPersistenceService:
             self.session.add(InventoryItem(user_id=user_id, item_id=item_id, quantity=quantity))
         else:
             inventory.quantity += quantity
+            self.session.add(InventoryItem(user_id=user_id, item_id=item_id, quantity=int(drop.get("quantity", 1))))
+        else:
+            inventory.quantity += int(drop.get("quantity", 1))

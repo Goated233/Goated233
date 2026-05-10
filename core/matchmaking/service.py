@@ -4,6 +4,10 @@ from typing import TYPE_CHECKING, Any
 
 from core.limits import LimitReason, LimitResult, LimitViolation, format_duration
 
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
 if TYPE_CHECKING:
     from infra.redis.queues import QueueStore
 else:
@@ -72,6 +76,20 @@ class MatchmakingService:
         queue_name = self._queue(game_id, mode, region)
         for _ in range(attempts):
             payload = await self.queues.dequeue(queue_name)
+class MatchmakingService:
+    def __init__(self, queues: QueueStore):
+        self.queues = queues
+
+    async def enqueue(self, ticket: MatchmakingTicket) -> int:
+        payload = {**ticket.__dict__, "queued_at": datetime.now(UTC).isoformat()}
+        await self.queues.enqueue(self._queue(ticket.game_id, ticket.mode, ticket.region if ticket.global_pool else str(ticket.guild_id or ticket.region)), payload)
+        return self.estimate_wait(ticket.mode, ticket.rating)
+
+    async def try_match(self, game_id: str, mode: str, needed_players: int, rating: int, region: str = "global") -> MatchResult:
+        tickets: list[MatchmakingTicket] = []
+        attempts = needed_players * 3
+        for _ in range(attempts):
+            payload = await self.queues.dequeue(self._queue(game_id, mode, region))
             if not payload:
                 break
             candidate = MatchmakingTicket(
@@ -93,6 +111,10 @@ class MatchmakingService:
                 await self.queues.enqueue(queue_name, payload)
                 self.guard.active_ticket_by_user[candidate.user_id] = queue_name
                 self.guard.enqueued_at[f"{queue_name}:{candidate.user_id}"] = datetime.now(UTC)
+            if mode != "ranked" or abs(candidate.rating - rating) <= self.rating_window(len(tickets)):
+                tickets.append(candidate)
+            else:
+                await self.queues.enqueue(self._queue(game_id, mode, region), payload)
             if len(tickets) >= needed_players:
                 return MatchResult(True, tickets, 0)
         return MatchResult(False, tickets, self.estimate_wait(mode, rating), "not_enough_balanced_players")
