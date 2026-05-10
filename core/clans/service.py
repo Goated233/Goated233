@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from typing import TYPE_CHECKING, Any
 
+from core.limits import LimitReason, LimitResult, LimitViolation, format_duration
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from database.models.platform import Clan
@@ -132,6 +134,24 @@ class ClanWar:
     rewards_claimed: bool = False
 
 
+@dataclass
+class ClanLimitState:
+    user_clan: dict[int, int] = field(default_factory=dict)
+    creation_cooldowns: dict[int, datetime] = field(default_factory=dict)
+    rename_cooldowns: dict[int, datetime] = field(default_factory=dict)
+    invite_cooldowns: dict[tuple[int, int], datetime] = field(default_factory=dict)
+    join_request_cooldowns: dict[tuple[int, int], datetime] = field(default_factory=dict)
+    war_cooldowns: dict[int, datetime] = field(default_factory=dict)
+    treasury_withdrawals: dict[tuple[int, int], list[datetime]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ClanCreationRequirements:
+    min_level: int = 5
+    coin_cost: int = 10_000
+    cooldown_hours: int = 24
+
+
 class ClanService:
     """Global MMO guild operations backed by the existing Clan record.
 
@@ -150,6 +170,21 @@ class ClanService:
         ClanRole.MEMBER: set(),
     }
 
+    CREATION_REQUIREMENTS = ClanCreationRequirements()
+    BASE_MAX_MEMBERS = 30
+    MEMBERS_PER_LEVEL = 2
+    INVITE_COOLDOWN_SECONDS = 60
+    JOIN_REQUEST_COOLDOWN_SECONDS = 120
+    RENAME_COOLDOWN_HOURS = 72
+    WAR_COOLDOWN_HOURS = 24
+
+    def __init__(self, session: AsyncSession, clan_model: type | None = None, limits: ClanLimitState | None = None):
+        self.session = session
+        self.clan_model = clan_model
+        self.limits = limits or ClanLimitState()
+
+    async def create_clan(self, request: ClanCreateRequest, user_level: int = 99, user_coins: int = 999_999) -> Clan:
+        self.validate_creation_requirements(request.owner_user_id, user_level, user_coins)
     def __init__(self, session: AsyncSession, clan_model: type | None = None):
         self.session = session
         self.clan_model = clan_model
@@ -169,6 +204,8 @@ class ClanService:
             metadata_json=self.default_metadata(request),
         )
         self.session.add(clan)
+        self.limits.user_clan[request.owner_user_id] = -1
+        self.limits.creation_cooldowns[request.owner_user_id] = datetime.now(UTC) + timedelta(hours=self.CREATION_REQUIREMENTS.cooldown_hours)
         return clan
 
     def default_metadata(self, request: ClanCreateRequest) -> dict:
@@ -235,6 +272,15 @@ class ClanService:
         return clan
 
     async def request_join(self, clan_id: int, user_id: int, server_id: int | None, note: str = "") -> ClanJoinRequest:
+        if user_id in self.limits.user_clan:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You are already in a clan.", active_reference=str(self.limits.user_clan[user_id])))
+        clan = await self._get_clan(clan_id)
+        data = self._metadata(clan)
+        self._check_timestamp_cooldown(self.limits.join_request_cooldowns, (clan_id, user_id), self.JOIN_REQUEST_COOLDOWN_SECONDS, "Clan join request cooldown active.")
+        if user_id in data.get("members", []):
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You are already in this clan."))
+        if any(row.get("user_id") == user_id for row in data.get("join_requests", [])):
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You already have a pending application to this clan."))
         clan = await self._get_clan(clan_id)
         data = self._metadata(clan)
         request = ClanJoinRequest(uuid4().hex[:12], clan_id, user_id, server_id, datetime.now(UTC), note)
@@ -248,6 +294,12 @@ class ClanService:
     async def invite_member(self, clan_id: int, sender_user_id: int, target_user_id: int) -> ClanInvite:
         clan = await self._get_clan(clan_id)
         data = self._metadata(clan)
+        self._require_role_above(data, sender_user_id, ClanRole.MEMBER)
+        self._check_timestamp_cooldown(self.limits.invite_cooldowns, (clan_id, target_user_id), self.INVITE_COOLDOWN_SECONDS, "Clan invite cooldown active.")
+        if target_user_id in data.get("members", []):
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "That player is already in this clan."))
+        if any(row.get("target_user_id") == target_user_id for row in data.get("invites", [])):
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "That player already has a pending clan invite."))
         invite = ClanInvite(
             uuid4().hex[:12],
             clan_id,
@@ -265,6 +317,15 @@ class ClanService:
         clan = await self._get_clan(clan_id)
         data = self._metadata(clan)
         members = data.setdefault("members", [])
+        if user_id in members:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "That player is already in this clan."))
+        if user_id in self.limits.user_clan and self.limits.user_clan[user_id] != clan_id:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You are already in a clan.", active_reference=str(self.limits.user_clan[user_id])))
+        if len(members) >= self.max_members(clan):
+            raise LimitViolation(LimitResult.block(LimitReason.CAPACITY, f"Clan roster is full ({len(members)}/{self.max_members(clan)})."))
+        if user_id not in members:
+            members.append(user_id)
+        self.limits.user_clan[user_id] = clan_id
         if user_id not in members:
             members.append(user_id)
         data.setdefault("member_roles", {})[str(user_id)] = role.value
@@ -280,6 +341,8 @@ class ClanService:
         data = self._metadata(clan)
         if user_id not in data.get("members", []):
             raise ValueError("Clan member not found")
+        if role == ClanRole.OWNER:
+            raise LimitViolation(LimitResult.block(LimitReason.OWNERSHIP, "Use transfer_ownership to move clan ownership."))
         data.setdefault("member_roles", {})[str(user_id)] = role.value
         self._append_activity(data, "role_changed", f"<@{user_id}> is now a clan {role.value}.")
         clan.metadata_json = data
@@ -372,6 +435,15 @@ class ClanService:
         return permission in self.ROLE_PERMISSIONS[role]
 
     def purchase_upgrade(self, clan: Clan, upgrade_id: str, cost: int, boost: dict) -> None:
+        data = self._metadata(clan)
+        economy = data.setdefault("economy", {})
+        if upgrade_id in economy.setdefault("upgrades", {}):
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "This clan upgrade is already owned."))
+        if cost <= 0 or cost > 1_000_000:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, "Invalid clan upgrade cost."))
+        if clan.bank_coins < cost:
+            raise ValueError("Clan bank does not have enough coins")
+        clan.bank_coins -= cost
         if clan.bank_coins < cost:
             raise ValueError("Clan bank does not have enough coins")
         data = self._metadata(clan)
@@ -390,6 +462,71 @@ class ClanService:
     def member_total_contribution(data: dict, user_id: int) -> int:
         contribution = data.get("member_contributions", {}).get(str(user_id), {})
         return int(contribution.get("xp", 0)) + int(contribution.get("coins", 0))
+
+
+    def validate_creation_requirements(self, user_id: int, user_level: int, user_coins: int) -> None:
+        now = datetime.now(UTC)
+        if user_id in self.limits.user_clan:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You can only belong to one clan at a time.", active_reference=str(self.limits.user_clan[user_id])))
+        cooldown_until = self.limits.creation_cooldowns.get(user_id)
+        if cooldown_until and cooldown_until > now:
+            raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, f"Clan creation cooldown active. Try again in {format_duration(cooldown_until - now)}.", retry_after_seconds=round((cooldown_until - now).total_seconds())))
+        if user_level < self.CREATION_REQUIREMENTS.min_level:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, f"Clan creation unlocks at level {self.CREATION_REQUIREMENTS.min_level}."))
+        if user_coins < self.CREATION_REQUIREMENTS.coin_cost:
+            raise LimitViolation(LimitResult.block(LimitReason.INSUFFICIENT_FUNDS, f"Clan creation costs {self.CREATION_REQUIREMENTS.coin_cost:,} coins."))
+
+    def max_members(self, clan: Clan) -> int:
+        return self.BASE_MAX_MEMBERS + self.level_for_xp(clan.xp) * self.MEMBERS_PER_LEVEL
+
+    def rename_clan(self, clan: Clan, actor_user_id: int, new_name: str) -> None:
+        data = self._metadata(clan)
+        self._require_role_above(data, actor_user_id, ClanRole.OFFICER)
+        self._check_timestamp_cooldown(self.limits.rename_cooldowns, clan.id, self.RENAME_COOLDOWN_HOURS * 3600, "Clan rename cooldown active.")
+        if len(new_name.strip()) < 3:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, "Clan names must be at least 3 characters."))
+        clan.name = new_name.strip()[:96]
+        self._append_activity(data, "renamed", f"The clan banner now carries the name {clan.name}.")
+        clan.metadata_json = data
+
+    def transfer_ownership(self, clan: Clan, current_owner_id: int, new_owner_id: int) -> None:
+        data = self._metadata(clan)
+        if int(data.get("owner_user_id", 0)) != current_owner_id:
+            raise LimitViolation(LimitResult.block(LimitReason.OWNERSHIP, "Only the clan owner can transfer ownership."))
+        if new_owner_id not in data.get("members", []):
+            raise LimitViolation(LimitResult.block(LimitReason.OWNERSHIP, "The new owner must be a clan member."))
+        data["owner_user_id"] = new_owner_id
+        roles = data.setdefault("member_roles", {})
+        roles[str(current_owner_id)] = ClanRole.OFFICER.value
+        roles[str(new_owner_id)] = ClanRole.OWNER.value
+        self._append_activity(data, "ownership_transfer", f"Clan ownership transferred to <@{new_owner_id}>.")
+        clan.metadata_json = data
+
+    def treasury_withdrawal_allowed(self, clan: Clan, actor_user_id: int, amount: int, daily_limit: int = 25_000) -> None:
+        data = self._metadata(clan)
+        self._require_role_above(data, actor_user_id, ClanRole.MEMBER)
+        if amount <= 0 or amount > daily_limit or amount > clan.bank_coins:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, "Clan treasury withdrawal failed validation."))
+        now = datetime.now(UTC)
+        key = (clan.id, actor_user_id)
+        recent = [stamp for stamp in self.limits.treasury_withdrawals.get(key, []) if now - stamp < timedelta(days=1)]
+        if len(recent) >= 3:
+            raise LimitViolation(LimitResult.block(LimitReason.RATE_LIMITED, "Clan treasury withdrawals are rate limited."))
+        recent.append(now)
+        self.limits.treasury_withdrawals[key] = recent
+
+    def _require_role_above(self, data: dict, user_id: int, minimum_exclusive: ClanRole) -> None:
+        hierarchy = {ClanRole.MEMBER: 1, ClanRole.OFFICER: 2, ClanRole.OWNER: 3}
+        role = ClanRole(data.get("member_roles", {}).get(str(user_id), ClanRole.MEMBER.value))
+        if hierarchy[role] <= hierarchy[minimum_exclusive]:
+            raise LimitViolation(LimitResult.block(LimitReason.OWNERSHIP, "Your clan role cannot perform that action."))
+
+    def _check_timestamp_cooldown(self, store: dict, key: Any, ttl_seconds: int, message: str) -> None:
+        now = datetime.now(UTC)
+        expires_at = store.get(key)
+        if expires_at and expires_at > now:
+            raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, f"{message} Try again in {format_duration(expires_at - now)}.", retry_after_seconds=round((expires_at - now).total_seconds())))
+        store[key] = now + timedelta(seconds=ttl_seconds)
 
     async def _get_clan(self, clan_id: int) -> Clan:
         clan = await self.session.get(self.clan_model, clan_id)
@@ -432,6 +569,15 @@ class ClanWarService:
         ClanContributionType.COINS: 1,
     }
 
+    def declare_war(self, attacker_clan_id: int, defender_clan_id: int, season_id: str, duration_hours: int = 48, limits: ClanLimitState | None = None) -> ClanWar:
+        if attacker_clan_id == defender_clan_id:
+            raise ValueError("A clan cannot declare war on itself")
+        now = datetime.now(UTC)
+        if limits is not None:
+            cooldown_until = limits.war_cooldowns.get(attacker_clan_id)
+            if cooldown_until and cooldown_until > now:
+                raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, f"Clan war declaration cooldown active. Try again in {format_duration(cooldown_until - now)}.", retry_after_seconds=round((cooldown_until - now).total_seconds())))
+            limits.war_cooldowns[attacker_clan_id] = now + timedelta(hours=24)
     def declare_war(self, attacker_clan_id: int, defender_clan_id: int, season_id: str, duration_hours: int = 48) -> ClanWar:
         if attacker_clan_id == defender_clan_id:
             raise ValueError("A clan cannot declare war on itself")

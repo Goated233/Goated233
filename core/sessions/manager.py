@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import uuid4
 from infra.redis.sessions import SessionStore
+from core.limits import LimitReason, LimitResult, LimitViolation
 
 
 class SessionStatus(StrEnum):
@@ -70,6 +71,10 @@ class SessionStartResult:
 class DistributedSessionManager:
     """Coordinates game session lifecycle across shards/workers via Redis."""
 
+    def __init__(self, store: SessionStore, timeout_seconds: int = 1800, max_concurrent_sessions: int = 10_000):
+        self.store = store
+        self.timeout_seconds = timeout_seconds
+        self.max_concurrent_sessions = max_concurrent_sessions
     def __init__(self, store: SessionStore, timeout_seconds: int = 1800):
         self.store = store
         self.timeout_seconds = timeout_seconds
@@ -86,6 +91,16 @@ class DistributedSessionManager:
         state: dict | None = None,
         force_recovery: bool = False,
     ) -> SessionStartResult:
+        if hasattr(self.store, "active_count") and await self.store.active_count() >= self.max_concurrent_sessions:
+            return SessionStartResult(False, None, None, "global_session_capacity_reached")
+        if len(set(player_discord_ids)) != len(player_discord_ids):
+            return SessionStartResult(False, None, None, "duplicate_players_in_session")
+        for player_id in player_discord_ids:
+            existing = await self.store.active_for_user(player_id)
+            if existing and not force_recovery:
+                existing_session = await self.load_session(existing)
+                if existing_session and existing_session.game_id == game_id and existing_session.status in {SessionStatus.LOBBY, SessionStatus.ACTIVE, SessionStatus.RECOVERING}:
+                    return SessionStartResult(False, None, existing, f"player_already_in_{game_id}")
         for player_id in player_discord_ids:
             existing = await self.store.active_for_user(player_id)
             if existing and not force_recovery:
@@ -107,6 +122,45 @@ class DistributedSessionManager:
         payload = await self.store.load(session_id)
         return ActiveSession.from_redis(payload) if payload else None
 
+    async def with_interaction_lock(self, session_id: str, actor_discord_id: int, interaction_id: str | None = None) -> bool:
+        session = await self.load_session(session_id)
+        if session is None:
+            return False
+        processed = session.state.setdefault("processed_interactions", [])
+        if interaction_id and interaction_id in processed:
+            return False
+        lock = await self.store.acquire_lock(session_id, actor_discord_id)
+        if not lock.acquired:
+            return False
+        try:
+            if interaction_id:
+                processed.append(interaction_id)
+                del processed[:-50]
+                await self.touch(session)
+            return True
+        finally:
+            await self.store.release_lock(lock)
+
+    async def mark_reward_claimed(self, session_id: str, reward_key: str) -> None:
+        session = await self.load_session(session_id)
+        if session is None:
+            raise LimitViolation(LimitResult.block(LimitReason.STALE, "That session is no longer active."))
+        claimed = session.state.setdefault("claimed_rewards", [])
+        if reward_key in claimed:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "This reward was already claimed.", active_reference=reward_key))
+        claimed.append(reward_key)
+        await self.touch(session)
+
+    async def recover_or_reject(self, discord_id: int) -> ActiveSession | None:
+        session_id = await self.store.active_for_user(discord_id)
+        if not session_id:
+            return None
+        session = await self.load_session(session_id)
+        if session and session.status in {SessionStatus.ACTIVE, SessionStatus.RECOVERING, SessionStatus.LOBBY}:
+            session.status = SessionStatus.RECOVERING
+            await self.touch(session)
+            return session
+        return None
     async def with_interaction_lock(self, session_id: str, actor_discord_id: int) -> bool:
         lock = await self.store.acquire_lock(session_id, actor_discord_id)
         if not lock.acquired:

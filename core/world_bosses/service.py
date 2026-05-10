@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+
+from core.limits import LimitReason, LimitResult, LimitViolation
 from ui.embeds.progress import progress_bar
 
 
@@ -35,6 +37,13 @@ class WorldBossState:
     faction_damage: dict[str, int] = field(default_factory=dict)
     participants_online: set[int] = field(default_factory=set)
     event_chain_id: str | None = None
+    reward_claims: set[int] = field(default_factory=set)
+
+
+class WorldBossService:
+    MAX_DAMAGE_EVENTS_PER_USER = 120
+    MAX_REGION_PARTICIPANTS = 10_000
+
 
 
 class WorldBossService:
@@ -53,6 +62,12 @@ class WorldBossService:
         return WorldBossState(boss_id, name, hp, hp, moment, moment + timedelta(hours=6), active_modifiers, region=chosen_region, event_chain_id=f"chain-{day // 7}")
 
     def apply_damage(self, boss: WorldBossState, user_id: int, damage: int, clan_id: int | None = None, faction_id: str | None = None) -> WorldBossState:
+        if boss.hp <= 0 or datetime.now(UTC) > boss.ends_at:
+            raise LimitViolation(LimitResult.block(LimitReason.EXPIRED, "This world boss event has ended."))
+        if user_id not in boss.participants_online and len(boss.participants_online) >= self.MAX_REGION_PARTICIPANTS:
+            raise LimitViolation(LimitResult.block(LimitReason.CAPACITY, "This region is at participation capacity."))
+        if damage <= 0 or damage > boss.max_hp // 2:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, "World boss damage failed validation."))
         actual = max(0, round(damage * (0.72 if BossModifier.ARMORED in boss.modifiers else 1.0)))
         boss.hp = max(0, boss.hp - actual)
         boss.damage_by_user[user_id] = boss.damage_by_user.get(user_id, 0) + actual
@@ -104,6 +119,17 @@ class WorldBossService:
         if region == WorldRegion.VOID_SEA:
             return [BossModifier.FACTION_SURGE]
         return [BossModifier.REGION_VOLATILE]
+
+    def claim_reward(self, boss: WorldBossState, user_id: int) -> dict:
+        damage = boss.damage_by_user.get(user_id, 0)
+        if damage <= 0:
+            raise LimitViolation(LimitResult.block(LimitReason.REQUIREMENT, "World boss rewards require verified participation."))
+        if user_id in boss.reward_claims:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You already claimed this world boss reward."))
+        rank_lookup = {ranked_user: rank for rank, ranked_user, _ in self.damage_rankings(boss, limit=10_000)}
+        reward = self.reward_tier(rank_lookup.get(user_id, 999), damage)
+        boss.reward_claims.add(user_id)
+        return reward
 
     def clan_reward(self, clan_rank: int, damage: int) -> dict:
         if clan_rank == 1:

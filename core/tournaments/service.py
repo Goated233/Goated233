@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from math import ceil, log2
 
+from core.limits import LimitReason, LimitResult, LimitViolation
+
 
 class TournamentStatus(StrEnum):
     SIGNUPS = "signups"
@@ -20,6 +22,8 @@ class TournamentState:
     participants: list[int] = field(default_factory=list)
     bracket: list[list[int | None]] = field(default_factory=list)
     rewards: dict = field(default_factory=dict)
+    max_participants: int = 128
+    signup_attempts: dict[int, datetime] = field(default_factory=dict)
 
 
 class TournamentService:
@@ -35,6 +39,16 @@ class TournamentService:
     def signup(self, tournament: TournamentState, user_id: int) -> TournamentState:
         if tournament.status != TournamentStatus.SIGNUPS:
             raise ValueError("Tournament signups are closed")
+        if user_id in tournament.participants:
+            raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You are already signed up for this tournament."))
+        if len(tournament.participants) >= tournament.max_participants:
+            raise LimitViolation(LimitResult.block(LimitReason.CAPACITY, "This tournament bracket is full."))
+        last_attempt = tournament.signup_attempts.get(user_id)
+        now = datetime.now(UTC)
+        if last_attempt and now - last_attempt < timedelta(seconds=10):
+            raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, "Tournament signup is cooling down."))
+        tournament.signup_attempts[user_id] = now
+        tournament.participants.append(user_id)
         if user_id not in tournament.participants:
             tournament.participants.append(user_id)
         return tournament

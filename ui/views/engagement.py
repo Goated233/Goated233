@@ -77,6 +77,7 @@ class SocialView(discord.ui.View):
 
     @discord.ui.button(label="Challenge", emoji="⚔️", style=discord.ButtonStyle.secondary, custom_id="aoa:social:challenge", row=0)
     async def challenge(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        invite = SocialService().create_invite(InviteType.CHALLENGE, interaction.user.id, interaction.user.id + 1, "anime_duel")
         invite = SocialService().create_invite(InviteType.CHALLENGE, interaction.user.id, interaction.user.id, "anime_duel")
         embed = discord.Embed(title="⚔️ Challenge Drafted", description=f"Invite `{invite.id}` expires at `{invite.expires_at:%H:%M UTC}`.", color=COLORS["danger"])
         await interaction.response.edit_message(embed=embed, view=self)

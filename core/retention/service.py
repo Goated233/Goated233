@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 
+from core.economy.anti_abuse import EconomyGuard
+
 
 class QuestCadence(StrEnum):
     DAILY = "daily"
@@ -44,6 +46,9 @@ class QuestProgress:
 
 
 class RetentionService:
+    def __init__(self, economy_guard: EconomyGuard | None = None):
+        self.economy_guard = economy_guard or EconomyGuard()
+
     DAILY_QUESTS = [
         QuestDefinition("daily_clear", QuestCadence.DAILY, "Daily Dungeon", "Clear one Dungeon Raid.", 1, "dungeon_clears", {"xp": 250, "coins": 150}, "🗡️"),
         QuestDefinition("daily_buttons", QuestCadence.DAILY, "Button Burst", "Use 12 arcade buttons.", 12, "button_clicks", {"xp": 120, "coins": 80}, "🔘"),
@@ -69,6 +74,11 @@ class RetentionService:
         gems = 10 if new_streak % 7 == 0 else 0
         booster = 30 if new_streak % 5 == 0 else 0
         return RetentionReward(True, new_streak, weekly, monthly, round(180 * multiplier), round(140 * multiplier), gems, booster, self.streak_visual(new_streak))
+
+
+    def claim_login_reward(self, user_id: int, last_claim: date | None, streak_day: int, now: datetime | None = None) -> RetentionReward:
+        self.economy_guard.claim_daily(user_id, now)
+        return self.login_reward(last_claim, streak_day, now)
 
     def streak_visual(self, streak_day: int) -> str:
         filled = min(7, ((streak_day - 1) % 7) + 1)

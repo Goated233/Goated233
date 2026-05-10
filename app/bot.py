@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import logging
 import discord
 from discord.ext import commands
-from app.commands import OwnerSetupCog
+from app.commands import OwnerSetupCog, PlayerCommandCog
 from app.config import get_settings
 from app.logger import configure_logging
 from app.startup import StartupValidator
@@ -23,7 +23,7 @@ class AlphaOmegaArcadeBot(commands.Bot):
         intents = discord.Intents.default()
         intents.guilds = True
         intents.members = False
-        super().__init__(command_prefix="aoa!", intents=intents, help_command=None)
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
         self.started_at = datetime.now(timezone.utc)
         self.db_engine = create_engine(self.settings.database_url)
         self.session_factory = create_session_factory(self.db_engine)
@@ -43,6 +43,7 @@ class AlphaOmegaArcadeBot(commands.Bot):
         validator = StartupValidator(self.settings, self.db_engine, self.redis)
         await validator.assert_ready()
         self.add_view(ArcadeHomeView(self.admin_service, self.session_manager))
+        await self.add_cog(PlayerCommandCog(self))
         self.tree.add_command(OwnerSetupCog(self))
         await self.tree.sync()
         logger.info("Alpha Omega Arcade startup checks passed and owner commands synced")
