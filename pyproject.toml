@@ -1,0 +1,39 @@
+[project]
+name = "alpha-omega-arcade"
+version = "0.2.0"
+description = "Button-first Discord gaming ecosystem built with Python, discord.py, PostgreSQL, Redis, and clean architecture."
+requires-python = ">=3.12"
+dependencies = [
+  "discord.py>=2.4,<3.0",
+  "SQLAlchemy[asyncio]>=2.0,<3.0",
+  "asyncpg>=0.29,<1.0",
+  "redis>=5.0,<6.0",
+  "pydantic>=2.7,<3.0",
+  "pydantic-settings>=2.2,<3.0",
+  "python-json-logger>=2.0,<3.0",
+  "alembic>=1.13,<2.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9.0",
+  "pytest-asyncio>=0.23,<1.0",
+  "ruff>=0.5,<1.0",
+  "mypy>=1.10,<2.0"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "ASYNC"]
+ignore = ["E501", "UP017"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
