@@ -185,6 +185,11 @@ class ClanService:
 
     async def create_clan(self, request: ClanCreateRequest, user_level: int = 99, user_coins: int = 999_999) -> Clan:
         self.validate_creation_requirements(request.owner_user_id, user_level, user_coins)
+    def __init__(self, session: AsyncSession, clan_model: type | None = None):
+        self.session = session
+        self.clan_model = clan_model
+
+    async def create_clan(self, request: ClanCreateRequest) -> Clan:
         from sqlalchemy import select
         from database.models.platform import Clan
 
@@ -276,6 +281,8 @@ class ClanService:
             raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You are already in this clan."))
         if any(row.get("user_id") == user_id for row in data.get("join_requests", [])):
             raise LimitViolation(LimitResult.block(LimitReason.DUPLICATE, "You already have a pending application to this clan."))
+        clan = await self._get_clan(clan_id)
+        data = self._metadata(clan)
         request = ClanJoinRequest(uuid4().hex[:12], clan_id, user_id, server_id, datetime.now(UTC), note)
         data.setdefault("join_requests", []).append(
             {**request.__dict__, "created_at": request.created_at.isoformat()}
@@ -319,6 +326,8 @@ class ClanService:
         if user_id not in members:
             members.append(user_id)
         self.limits.user_clan[user_id] = clan_id
+        if user_id not in members:
+            members.append(user_id)
         data.setdefault("member_roles", {})[str(user_id)] = role.value
         servers = data.setdefault("member_servers", {}).setdefault(str(user_id), [])
         if server_id is not None and server_id not in servers:
@@ -435,6 +444,11 @@ class ClanService:
         if clan.bank_coins < cost:
             raise ValueError("Clan bank does not have enough coins")
         clan.bank_coins -= cost
+        if clan.bank_coins < cost:
+            raise ValueError("Clan bank does not have enough coins")
+        data = self._metadata(clan)
+        clan.bank_coins -= cost
+        economy = data.setdefault("economy", {})
         economy.setdefault("upgrades", {})[upgrade_id] = {"purchased_at": datetime.now(UTC).isoformat(), "boost": boost}
         economy.setdefault("boosts", {}).update(boost)
         self._append_activity(data, "upgrade", f"Clan upgrade `{upgrade_id}` is now active.")
@@ -564,6 +578,10 @@ class ClanWarService:
             if cooldown_until and cooldown_until > now:
                 raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, f"Clan war declaration cooldown active. Try again in {format_duration(cooldown_until - now)}.", retry_after_seconds=round((cooldown_until - now).total_seconds())))
             limits.war_cooldowns[attacker_clan_id] = now + timedelta(hours=24)
+    def declare_war(self, attacker_clan_id: int, defender_clan_id: int, season_id: str, duration_hours: int = 48) -> ClanWar:
+        if attacker_clan_id == defender_clan_id:
+            raise ValueError("A clan cannot declare war on itself")
+        now = datetime.now(UTC)
         war = ClanWar(
             id=uuid4().hex[:12],
             attacker_clan_id=attacker_clan_id,

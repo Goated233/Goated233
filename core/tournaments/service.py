@@ -49,6 +49,8 @@ class TournamentService:
             raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, "Tournament signup is cooling down."))
         tournament.signup_attempts[user_id] = now
         tournament.participants.append(user_id)
+        if user_id not in tournament.participants:
+            tournament.participants.append(user_id)
         return tournament
 
     def generate_bracket(self, tournament: TournamentState) -> TournamentState:
