@@ -89,9 +89,6 @@ class SocialService:
     PARTY_AFK_TIMEOUT_MINUTES = 30
     DEFAULT_MAX_PARTY_SIZE = 5
 
-
-
-class SocialService:
     def create_invite(
         self,
         invite_type: InviteType,
@@ -132,17 +129,12 @@ class SocialService:
         action = invite_type.value.replace("_", " ")
         gateway = " across the Omega network" if source_guild_id != target_guild_id else ""
         invite = SocialInvite(
-    ) -> SocialInvite:
-        action = invite_type.value.replace("_", " ")
-        gateway = " across the Omega network" if source_guild_id != target_guild_id else ""
-        return SocialInvite(
             uuid4().hex[:12],
             invite_type,
             sender_id,
             target_id,
             game_id,
             now + timedelta(minutes=self.INVITE_TTL_MINUTES),
-            datetime.now(UTC) + timedelta(minutes=15),
             f"<@{sender_id}> sent you a {action} invite{gateway}",
             source_guild_id,
             target_guild_id,
@@ -195,8 +187,6 @@ class SocialService:
                     )
                 )
         party = Party(
-    ) -> Party:
-        return Party(
             id=uuid4().hex[:10],
             leader_id=leader_id,
             members=[leader_id],
@@ -306,16 +296,6 @@ class SocialService:
 
     def challenge_request(self, sender_id: int, target_id: int, game_id: str, wager_coins: int = 0, graph: SocialGraph | None = None) -> SocialInvite:
         invite = self.create_invite(InviteType.CHALLENGE, sender_id, target_id, game_id, graph=graph)
-
-    def join_party(self, party: Party, user_id: int, max_size: int = 5, source_guild_id: int | None = None) -> Party:
-        if user_id not in party.members and len(party.members) < max_size:
-            party.members.append(user_id)
-        if source_guild_id is not None and party.home_guild_id is not None and source_guild_id != party.home_guild_id:
-            party.cross_server = True
-        return party
-
-    def challenge_request(self, sender_id: int, target_id: int, game_id: str, wager_coins: int = 0) -> SocialInvite:
-        invite = self.create_invite(InviteType.CHALLENGE, sender_id, target_id, game_id)
         return SocialInvite(
             invite.id,
             invite.invite_type,

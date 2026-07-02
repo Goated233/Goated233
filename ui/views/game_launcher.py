@@ -146,26 +146,6 @@ class DungeonLobbyView(discord.ui.View):
         await interaction.response.edit_message(embed=DungeonCombatView.combat_embed(result.session.state["dungeon"], result.session.session_id), view=DungeonCombatView(self.session_manager, result.session.session_id))
 
 
-GameLauncherView = GameBrowserView
-            state={"tier": 1, "dungeon": dungeon_to_dict(run), "claimed": False},
-        )
-        if not result.started:
-            await interaction.response.send_message(
-                f"⚠️ You are already in session `{result.existing_session_id}`. Finish or recover it first.", ephemeral=True
-            )
-            return
-        await interaction.response.edit_message(
-            embed=DungeonCombatView.combat_embed(result.session.state["dungeon"], result.session.session_id),
-            view=DungeonCombatView(self.session_manager, result.session.session_id),
-        )
-
-    @discord.ui.button(label="Back", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="aoa:dungeon:back", row=0)
-    async def back(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        await interaction.response.edit_message(
-            embed=discord.Embed(title="🎮 Game Launcher", description="Choose a game card below.", color=COLORS["primary"]),
-            view=GameLauncherView(self.session_manager),
-        )
-
 
 class DungeonCombatView(discord.ui.View):
     def __init__(self, session_manager: DistributedSessionManager, session_id: str):
