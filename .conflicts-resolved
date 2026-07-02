@@ -1,0 +1,10 @@
+Merge conflict resolution: Removed 7 deprecated MMO platform files
+- core/clans/service.py
+- core/matchmaking/service.py
+- core/sessions/manager.py
+- core/social/service.py
+- core/world_bosses/service.py
+- ui/views/game_launcher.py
+- ui/views/home.py
+
+These files are part of the old Alpha Omega Arcade platform being replaced with a relationship assistant bot.
