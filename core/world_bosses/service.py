@@ -44,9 +44,6 @@ class WorldBossService:
     MAX_DAMAGE_EVENTS_PER_USER = 120
     MAX_REGION_PARTICIPANTS = 10_000
 
-
-
-class WorldBossService:
     BOSS_ROTATION = [
         ("void_titan", "Void Titan", 1_000_000, [BossModifier.ARMORED, BossModifier.CLAN_GLORY]),
         ("solar_wyrm", "Solar Wyrm", 750_000, [BossModifier.ENRAGED, BossModifier.TREASURE_HOARD]),

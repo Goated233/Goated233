@@ -185,11 +185,6 @@ class ClanService:
 
     async def create_clan(self, request: ClanCreateRequest, user_level: int = 99, user_coins: int = 999_999) -> Clan:
         self.validate_creation_requirements(request.owner_user_id, user_level, user_coins)
-    def __init__(self, session: AsyncSession, clan_model: type | None = None):
-        self.session = session
-        self.clan_model = clan_model
-
-    async def create_clan(self, request: ClanCreateRequest) -> Clan:
         from sqlalchemy import select
         from database.models.platform import Clan
 
@@ -578,10 +573,6 @@ class ClanWarService:
             if cooldown_until and cooldown_until > now:
                 raise LimitViolation(LimitResult.block(LimitReason.COOLDOWN, f"Clan war declaration cooldown active. Try again in {format_duration(cooldown_until - now)}.", retry_after_seconds=round((cooldown_until - now).total_seconds())))
             limits.war_cooldowns[attacker_clan_id] = now + timedelta(hours=24)
-    def declare_war(self, attacker_clan_id: int, defender_clan_id: int, season_id: str, duration_hours: int = 48) -> ClanWar:
-        if attacker_clan_id == defender_clan_id:
-            raise ValueError("A clan cannot declare war on itself")
-        now = datetime.now(UTC)
         war = ClanWar(
             id=uuid4().hex[:12],
             attacker_clan_id=attacker_clan_id,

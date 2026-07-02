@@ -223,19 +223,3 @@ class ArcadeHomeView(discord.ui.View):
             embed=AdminDashboardView.embed_factory.dashboard(context, stats),
             view=AdminDashboardView(self.admin_service, context),
         )
-
-
-def build_home_embed(owner_display: str) -> discord.Embed:
-    embed = discord.Embed(
-        title="🌌 Alpha Omega Arcade",
-        description=(
-            "A premium button-first gaming console inside Discord. Navigate with buttons, "
-            "persistent views, select menus, modals, and polished embeds.\n\n"
-            f"👑 Owner: {owner_display}"
-        ),
-        color=COLORS["primary"],
-    )
-    embed.add_field(name="🎮 Play", value="Games • Ranked • Events • Quests", inline=True)
-    embed.add_field(name="📈 Progress", value="Profiles • Inventory • Cosmetics • Achievements", inline=True)
-    embed.add_field(name="🌍 Compete", value="Leaderboards • Clans • Tournaments • Seasons", inline=True)
-    return embed

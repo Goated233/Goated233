@@ -75,10 +75,6 @@ class DistributedSessionManager:
         self.store = store
         self.timeout_seconds = timeout_seconds
         self.max_concurrent_sessions = max_concurrent_sessions
-    def __init__(self, store: SessionStore, timeout_seconds: int = 1800):
-        self.store = store
-        self.timeout_seconds = timeout_seconds
-
     async def start_session(
         self,
         *,
@@ -161,13 +157,6 @@ class DistributedSessionManager:
             await self.touch(session)
             return session
         return None
-    async def with_interaction_lock(self, session_id: str, actor_discord_id: int) -> bool:
-        lock = await self.store.acquire_lock(session_id, actor_discord_id)
-        if not lock.acquired:
-            return False
-        await self.store.release_lock(lock)
-        return True
-
     async def touch(self, session: ActiveSession) -> None:
         await self.store.save(session.session_id, session.to_redis())
 
